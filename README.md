@@ -5,35 +5,85 @@
 ![Librosa](https://img.shields.io/badge/Audio-Librosa-orange.svg)
 ![Rule Based](https://img.shields.io/badge/Algorithm-Rule_Based-success.svg)
 
-> [cite_start]Zaman düzlemi sinyal analiz yöntemleri kullanılarak `.wav` uzantılı ses kayıtlarından öznitelik çıkarımı yapan ve **Kural Tabanlı (Rule-Based)** bir algoritma ile cinsiyet tahmini (Erkek, Kadın, Çocuk) gerçekleştiren interaktif web uygulaması. [cite: 3, 9]
+> Zaman düzlemi analiz yöntemlerini kullanarak ses işaretlerinden öznitelik çıkaran ve **Kural Tabanlı (Rule-Based)** bir algoritma ile Cinsiyet Sınıflandırması (Erkek, Kadın, Çocuk) gerçekleştiren interaktif bir web uygulamasıdır.
 
-[cite_start]Uygulama arayüzü **Streamlit** kullanılarak geliştirilmiştir.  [cite_start]Makine öğrenmesi modeli (Machine Learning) *kullanılmamış*, sınıflandırma işlemi tamamen **sinyal işleme teorilerine** ve literatürdeki temel frekans ($F_0$) eşik değerlerine dayandırılmıştır. 
+Bu proje kapsamında; temel frekans ($F_0$), enerji ve ZCR özellikleri elde edilmiş, bu özelliklerin cinsiyet bazlı dağılımları incelenmiş ve makine öğrenmesi modeli kullanılmadan tamamen sinyal işleme teorilerine dayalı bir sınıflandırıcı geliştirilmiştir.
 
 ---
 
 ## ✨ Özellikler
 
-* **📊 Zaman Düzlemi Analizi:** Kısa Süreli Enerji (STE) ve Sıfır Geçiş Oranı (ZCR) kullanılarak sinyaldeki sesli (voiced) ve sessiz (unvoiced) bölge ayrımı. [cite: 23, 57]
-* **🌊 Otokorelasyon ile $F_0$ Tespiti:** Sesli pencerelerde otokorelasyon fonksiyonu kullanılarak Temel Frekans (Pitch - $F_0$) hesaplaması. [cite: 27, 30]
-* **▶️ Canlı Demo Modülü:** Arayüzden yüklenen tekil bir `.wav` dosyasını anında analiz etme; [cite_start]$F_0$ değerini hesaplama, FFT Spektrumu ve Otokorelasyon grafiklerini görselleştirme. [cite: 34, 44, 67]
-* **📈 Toplu Veri Seti Analizi:** Excel meta verilerini okuyarak tüm ses dosyalarını toplu işleme, sistem başarı oranını (Accuracy) hesaplama ve **Karışıklık Matrisi (Confusion Matrix)** çıkarma. [cite: 11, 44, 60]
-* **⚠️ Hata Takip Sistemi:** Okunamayan, bozuk veya sinyal kalitesi yetersiz olan dosyaları otomatik tespit edip arayüzde raporlama. 
+* **📊 Zaman Düzlemi Analizi:** Kısa Süreli Enerji (STE) ve Sıfır Geçiş Oranı (ZCR) kullanılarak sinyaldeki sesli (voiced) ve sessiz (unvoiced) bölgelerin tespiti.
+* **🌊 Otokorelasyon ile $F_0$ Tespiti:** Sesli pencerelerde Otokorelasyon fonksiyonu ($R_\tau$) kullanılarak sinyalin periyodik yapısının analizi ve Temel Frekans ($F_0$) hesaplaması.
+* **▶️ Canlı Demo Modülü:** Arayüzden yüklenen tekil bir ses dosyasının sınıfını (E/K/Ç) tahmin etme; Otokorelasyon grafiğini ve FFT Spektrumunu yan yana görselleştirme.
+* **📈 Toplu Veri Seti Analizi:** Tüm grup klasörlerindeki ses dosyalarını ve metadata Excel dosyalarını birleştirerek toplu işleme.
+* **⚠️ Başarı Raporlama:** Tüm veri seti üzerindeki genel başarıyı (Accuracy) hesaplama ve Karışıklık Matrisi (Confusion Matrix) üzerinden hata analizi yapma.
 
 ---
 
 ## 📂 Proje Klasör Yapısı
 
-Projenin sorunsuz çalışması için klasör hiyerarşisinin aşağıdaki gibi olması beklenmektedir: [cite: 15]
+Projenin sorunsuz çalışması için klasör hiyerarşisinin aşağıdaki "Dataset/" ana klasörü yapısına uygun olması gerekmektedir:
 
 ```text
 ├── Dataset/                  # Ana veri seti klasörü
-│   ├── Grup_01/
-│   │   ├── Grup_01_MetaVeri.xlsx
-│   │   ├── G01_D01_E_21_Mutlu.wav
+│   ├── Grup_01/              # Her grubun kendi klasörü
+│   │   ├── Grup_01.xlsx      # Metadata Excel dosyası
+│   │   ├── sample1.wav       # .wav uzantılı ses dosyaları
 │   │   └── ...
-│   └── Grup_17/
-│       ├── Grup_17_MetaVeri.xlsx
-│       ├── G17_D01_E_21_Notr_C1.wav
-│       └── ...
-├── app.py                    # Ana Streamlit uygulama kodu
+│   └── ...
+├── app.py                    # Python tabanlı uygulama kodu
 └── README.md                 # Proje dokümantasyonu
+```
+
+---
+
+## ⚙️ Kurulum ve Gereksinimler
+
+Projenin bağımlılıklarını izole bir ortamda kurmanız tavsiye edilir. Uygulama **Python** tabanlıdır.
+
+**1. Depoyu Klonlayın:**
+```bash
+git clone [https://github.com/kullanici_adiniz/proje_adi.git](https://github.com/kullanici_adiniz/proje_adi.git)
+cd proje_adi
+```
+
+**2. Gerekli Kütüphaneleri Yükleyin:**
+Aşağıdaki temel kütüphanelerin yüklü olduğundan emin olun:
+```bash
+pip install streamlit librosa numpy pandas scipy matplotlib seaborn openpyxl
+```
+
+---
+
+## 🧰 Kullanılan Temel Teknolojiler
+
+| Kütüphane | Kullanım Amacı |
+| :--- | :--- |
+| **`streamlit`** | Web tabanlı kullanıcı arayüzü tasarımı. |
+| **`librosa`** | Ses dosyalarının yüklenmesi ve işlenmesi. |
+| **`numpy` & `scipy`** | Matematiksel hesaplamalar ve sinyal işleme operasyonları. |
+| **`pandas`** | Excel verilerinin okunması ve yönetilmesi. |
+| **`matplotlib`** | Otokorelasyon ve FFT grafiklerinin görselleştirilmesi. |
+
+---
+
+## 🚀 Uygulamayı Çalıştırma
+
+Terminalde projenin bulunduğu ana dizindeyken aşağıdaki komutu çalıştırın:
+
+```bash
+streamlit run app.py
+```
+
+Komutu çalıştırdıktan sonra tarayıcınızda uygulama otomatik olarak açılacaktır. Arayüz üzerinden bir ses dosyası seçerek sınıflandırma yapabilir veya tüm veri seti üzerinde başarı analizi gerçekleştirebilirsiniz.
+
+---
+
+## 🧠 Algoritma ve Eşik Değerleri (Thresholds)
+
+Sınıflandırma işlemi, Otokorelasyon yöntemiyle bulunan Ortalama $F_0$ değerlerine dayalı "Kural Tabanlı" bir algoritma ile yapılır. Sistem, hesaplanan değerleri şu aralıklara göre kategorize eder:
+
+* 👨 **Erkek Sesi:** `85 Hz` - `175 Hz`
+* 👩 **Kadın Sesi:** `175 Hz` - `280 Hz`
+* 🧒 **Çocuk Sesi:** `> 280 Hz`
