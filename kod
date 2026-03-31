@@ -1,0 +1,282 @@
+import os
+import glob
+import numpy as np
+import pandas as pd
+import librosa
+import streamlit as st
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+
+
+# ==========================================
+# 1. SİNYAL İŞLEME VE ÖZNİTELİK ÇIKARIMI
+# ==========================================
+
+def calculate_ste(frame):
+    return np.sum(frame ** 2)
+
+
+def calculate_zcr(frame):
+    return np.sum(np.abs(np.diff(np.sign(frame)))) / (2 * len(frame))
+
+
+def compute_autocorrelation_pitch(frame, sr, fmin=70, fmax=400):
+    autocorr = np.correlate(frame, frame, mode='full')
+    autocorr = autocorr[len(autocorr) // 2:]
+
+    min_lag = int(sr / fmax)
+    max_lag = int(sr / fmin)
+    search_range = autocorr[min_lag:max_lag]
+
+    if len(search_range) == 0: return 0.0
+    peak_idx = np.argmax(search_range)
+    true_lag = min_lag + peak_idx
+    return sr / true_lag
+
+
+def extract_features(audio_path):
+    if not os.path.exists(audio_path):
+        return None, "Dosya yolda bulunamadı"
+
+    try:
+        audio, sr = librosa.load(audio_path, sr=None)
+    except Exception:
+        return None, "Librosa dosyayı okuyamadı (Bozuk .wav)"
+
+    frame_length_ms = 30
+    frame_length = int(sr * (frame_length_ms / 1000.0))
+    hop_length = int(frame_length / 2)
+    frames = librosa.util.frame(audio, frame_length=frame_length, hop_length=hop_length).T
+
+    energies = np.array([calculate_ste(f) for f in frames])
+    zcrs = np.array([calculate_zcr(f) for f in frames])
+
+    # Filtreleri biraz daha esnettik (Daha çok ses yakalasın diye)
+    energy_threshold = np.mean(energies) * 0.2
+    zcr_threshold = np.mean(zcrs) * 2.5
+
+    f0_values = []
+    voiced_frames = []
+
+    for i in range(len(frames)):
+        if energies[i] > energy_threshold and zcrs[i] < zcr_threshold:
+            f0 = compute_autocorrelation_pitch(frames[i], sr)
+            if 70 <= f0 <= 400:
+                f0_values.append(f0)
+                voiced_frames.append(frames[i])
+
+    # EĞER HİÇ VOICED BULAMADIYSA: En yüksek enerjili 5 kısmı zorla al (Fallback)
+    if not f0_values:
+        top_frames_idx = np.argsort(energies)[-5:]
+        for idx in top_frames_idx:
+            f0 = compute_autocorrelation_pitch(frames[idx], sr)
+            if 70 <= f0 <= 400:
+                f0_values.append(f0)
+                voiced_frames.append(frames[idx])
+
+    if not f0_values:
+        return None, "Sinyalde hiç insan sesi frekansı (70-400Hz) tespit edilemedi"
+
+    features = {
+        'Ortalama_F0': np.mean(f0_values),
+        'Ortalama_ZCR': np.mean(zcrs),
+        'Enerji_Ortalamasi': np.mean(energies)
+    }
+
+    return (features, voiced_frames, sr), "OK"
+
+
+# ==========================================
+# 2. KURAL TABANLI SINIFLANDIRICI (RULE-BASED)
+# ==========================================
+
+def classify_gender(f0_value):
+    if pd.isna(f0_value) or f0_value == 0: return "Bilinmiyor"
+
+    # Eşik (Threshold) değerleri güncellendi
+    if 85 <= f0_value <= 175:
+        return "Erkek"
+    elif 175 < f0_value <= 280:  # Eskiden 245'ti, 280'e çektik ki kadınlar çocuk sanılmasın
+        return "Kadın"
+    elif f0_value > 280:
+        return "Çocuk"
+    else:
+        return "Erkek"
+
+
+# ==========================================
+# 3. AKILLI VERİ OKUMA VE BİRLEŞTİRME
+# ==========================================
+
+def process_entire_dataset(dataset_path="Dataset/"):
+    excel_files = glob.glob(f"{dataset_path}**/Grup_*.xlsx", recursive=True)
+    if not excel_files: return None, [], "Dataset klasöründe Excel dosyası bulunamadı."
+
+    results = []
+    skipped_files = []  # Atlanan dosyaları takip etmek için
+
+    for excel_file in excel_files:
+        df = pd.read_excel(excel_file)
+        base_dir = os.path.dirname(excel_file)
+
+        # Sütun isimlerini akıllı arama (Büyük/küçük harf veya boşluk hatalarını yoksayar)
+        file_col = next((col for col in df.columns if 'dosya' in str(col).lower()), None)
+        gender_col = next((col for col in df.columns if 'cinsiyet' in str(col).lower()), None)
+
+        if not file_col or not gender_col:
+            st.error(f"{excel_file} dosyasında 'Dosya' veya 'Cinsiyet' kelimesi geçen sütun bulunamadı!")
+            continue
+
+        for index, row in df.iterrows():
+            file_name = str(row[file_col]).strip()
+            if file_name.lower() == 'nan' or not file_name:
+                continue
+
+            # Akıllı Cinsiyet Okuyucu (E, Erkek, ERKEK, K, Kadın hepsini tanır)
+            raw_gender = str(row[gender_col]).strip().upper()
+            if raw_gender.startswith('E'):
+                true_label = 'Erkek'
+            elif raw_gender.startswith('K'):
+                true_label = 'Kadın'
+            elif raw_gender.startswith('C') or raw_gender.startswith('Ç'):
+                true_label = 'Çocuk'
+            else:
+                true_label = 'Bilinmiyor'
+
+            # Klasör yolu birleştirme
+            file_path = file_name
+            if not os.path.exists(file_path):
+                file_path = os.path.join(base_dir, file_name)
+
+            if not os.path.exists(file_path):
+                skipped_files.append({"Dosya": file_name, "Sebep": "Klasörde böyle bir .wav dosyası yok"})
+                continue
+
+            extracted_data, status_msg = extract_features(file_path)
+
+            if extracted_data:
+                features, _, _ = extracted_data
+                f0 = features['Ortalama_F0']
+                pred_label = classify_gender(f0)
+
+                results.append({
+                    'Dosya': file_name,
+                    'Gercek_Sinif': true_label,
+                    'Tahmin_Sinif': pred_label,
+                    'F0': f0,
+                    'Dogru_Mu': 1 if true_label == pred_label else 0
+                })
+            else:
+                skipped_files.append({"Dosya": file_name, "Sebep": status_msg})
+
+    df_results = pd.DataFrame(results)
+    return df_results, skipped_files, "Analiz süreci tamamlandı."
+
+
+# ==========================================
+# 4. GÖRSELLEŞTİRME (OTOKORELASYON VS FFT)
+# ==========================================
+
+def plot_signals(frame, sr):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4))
+
+    autocorr = np.correlate(frame, frame, mode='full')
+    autocorr = autocorr[len(autocorr) // 2:]
+    lags = np.arange(len(autocorr))
+    time_lags = lags / sr
+
+    ax1.plot(time_lags[:int(sr / 50)], autocorr[:int(sr / 50)], color='darkblue')
+    ax1.set_title("Otokorelasyon (Zaman Düzlemi)")
+    ax1.set_xlabel("Gecikme (saniye)")
+    ax1.set_ylabel("Genlik")
+    ax1.grid(True)
+
+    n = len(frame)
+    fft_result = np.fft.fft(frame)
+    freqs = np.fft.fftfreq(n, 1 / sr)
+    pos_mask = (freqs > 0) & (freqs < 500)
+
+    ax2.plot(freqs[pos_mask], np.abs(fft_result)[pos_mask], color='crimson')
+    ax2.set_title("FFT Spektrumu (Frekans Düzlemi)")
+    ax2.set_xlabel("Frekans (Hz)")
+    ax2.set_ylabel("Büyüklük")
+    ax2.grid(True)
+    return fig
+
+
+# ==========================================
+# 5. STREAMLIT KULLANICI ARAYÜZÜ (UI)
+# ==========================================
+
+st.set_page_config(page_title="Cinsiyet Sınıflandırma", layout="wide")
+st.title("🎙️ Ses İşareti Analizi ve Kural Tabanlı Sınıflandırma")
+
+tab_demo, tab_dataset = st.tabs(["Canlı Demo", "Veri Seti Analizi ve Raporlama"])
+
+with tab_demo:
+    uploaded_file = st.file_uploader("Analiz edilecek .wav dosyasını yükleyin", type=['wav'])
+    if uploaded_file is not None:
+        temp_path = "temp_audio.wav"
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.audio(temp_path, format='audio/wav')
+
+        extracted_data, msg = extract_features(temp_path)
+        if extracted_data:
+            features, voiced_frames, sr = extracted_data
+            f0_val = features['Ortalama_F0']
+            prediction = classify_gender(f0_val)
+
+            c1, c2 = st.columns(2)
+            c1.metric("Tahmin Edilen Sınıf", prediction)
+            c2.metric("Hesaplanan Ortalama F0", f"{f0_val:.2f} Hz")
+
+            mid_idx = len(voiced_frames) // 2
+            fig = plot_signals(voiced_frames[mid_idx], sr)
+            st.pyplot(fig)
+        else:
+            st.error(f"Analiz Başarısız: {msg}")
+
+        if os.path.exists(temp_path): os.remove(temp_path)
+
+with tab_dataset:
+    if st.button("Veri Setini Çalıştır ve Raporla", type="primary"):
+        df_results, skipped, message = process_entire_dataset()
+
+        # Hata Takip Ekranı (EĞER DOSYA OKUNAMADIYSA BURADA GÖZÜKECEK)
+        if skipped:
+            with st.expander(f"⚠️ Atlanan / İşlenemeyen Dosyalar ({len(skipped)} adet)", expanded=True):
+                st.warning(
+                    "Aşağıdaki dosyalar Excel'de var ancak analiz edilemedi. Sebeplerini tablodan inceleyebilirsiniz.")
+                st.dataframe(pd.DataFrame(skipped), use_container_width=True)
+
+        if df_results is not None and not df_results.empty:
+            st.success(f"{message} (Başarıyla işlenen dosya sayısı: {len(df_results)})")
+
+            stats = df_results.groupby('Gercek_Sinif').agg(
+                Örnek_Sayısı=('F0', 'count'),
+                Ortalama_F0=('F0', 'mean'),
+                Standart_Sapma=('F0', 'std'),
+                Basari_Yuzdesi=('Dogru_Mu', lambda x: (x.sum() / len(x)) * 100)
+            ).reset_index()
+
+            stats.columns = ['Sınıf', 'Örnek Sayısı', 'Ortalama F0 (Hz)', 'Standart Sapma', 'Başarı (%)']
+            stats['Ortalama F0 (Hz)'] = stats['Ortalama F0 (Hz)'].round(2)
+            stats['Standart Sapma'] = stats['Standart Sapma'].round(2)
+            stats['Başarı (%)'] = stats['Başarı (%)'].round(2).astype(str) + " %"
+
+            st.subheader("İstatistiksel Bulgular")
+            st.dataframe(stats, use_container_width=True)
+
+            st.subheader("Hata Analizi: Karışıklık Matrisi")
+            labels = ['Erkek', 'Kadın', 'Çocuk']
+            y_true = df_results['Gercek_Sinif'].tolist()
+            y_pred = df_results['Tahmin_Sinif'].tolist()
+            cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=labels, yticklabels=labels, ax=ax)
+            ax.set_ylabel('Gerçek Sınıf')
+            ax.set_xlabel('Sistem Tahmini')
+            st.pyplot(fig)
